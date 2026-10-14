@@ -44,7 +44,6 @@
       backdrop-filter: blur(16px);
       border-top: 1px solid rgba(255, 255, 255, 0.08);
     }
-    /* Hide scrollbar for clean mobile look */
     ::-webkit-scrollbar { display: none; }
   </style>
 </head>
@@ -92,8 +91,8 @@
           <span class="text-slate-400">Debts: <strong id="heroDebts" class="money text-rose-400 font-semibold">£0</strong></span>
         </div>
         <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex">
-          <div id="assetBar" class="bg-emerald-500 h-full transition-all duration-500" style="width: 80%"></div>
-          <div id="debtBar" class="bg-rose-500 h-full transition-all duration-500" style="width: 20%"></div>
+          <div id="assetBar" class="bg-emerald-500 h-full transition-all duration-500" style="width: 100%"></div>
+          <div id="debtBar" class="bg-rose-500 h-full transition-all duration-500" style="width: 0%"></div>
         </div>
       </div>
 
@@ -152,7 +151,7 @@
         + Add Item
       </button>
     </div>
-    <p class="text-xs text-slate-400">Tap any account to quickly update its balance or ownership share.</p>
+    <p class="text-xs text-slate-400">Tap any account to update its balance or ownership share.</p>
 
     <div id="accountsContainer" class="space-y-4"></div>
   </main>
@@ -160,7 +159,7 @@
   <!-- VIEW 3: BACKUP & SETTINGS -->
   <main id="view-settings" class="space-y-4 hidden">
     <h2 class="text-lg font-bold">Data & Backup</h2>
-    <p class="text-xs text-slate-400">All financial data is stored strictly on this phone inside local storage. Export a backup periodically to keep your history safe.</p>
+    <p class="text-xs text-slate-400">Your balances are automatically saved to your phone's internal storage (`localStorage` + `IndexedDB`). Export a backup anytime for safekeeping.</p>
 
     <div class="glass-card rounded-2xl p-4 space-y-3">
       <h3 class="text-sm font-semibold">Export Data</h3>
@@ -180,14 +179,22 @@
     </div>
 
     <div class="glass-card rounded-2xl p-4 space-y-3">
-      <h3 class="text-sm font-semibold text-rose-400">Snapshot History</h3>
+      <h3 class="text-sm font-semibold text-slate-200">Snapshot History</h3>
       <div id="snapshotHistoryList" class="space-y-2 max-h-48 overflow-y-auto text-xs"></div>
+    </div>
+
+    <div class="glass-card rounded-2xl p-4 space-y-2 border border-rose-500/20">
+      <h3 class="text-sm font-semibold text-rose-400">Reset App</h3>
+      <p class="text-xs text-slate-400">Wipe all saved accounts and snapshots from this device.</p>
+      <button onclick="clearAllData()" class="mt-2 py-2 px-4 rounded-xl bg-rose-500/20 text-rose-400 text-xs font-semibold active:scale-95 transition">
+        Delete All Data
+      </button>
     </div>
   </main>
 
   <!-- ADD / EDIT ACCOUNT MODAL -->
   <div id="accountModal" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 hidden flex items-end justify-center">
-    <div class="bg-slate-900 border-t border-slate-800 w-full max-w-md rounded-t-3xl p-6 space-y-4 animate-slide-up">
+    <div class="bg-slate-900 border-t border-slate-800 w-full max-w-md rounded-t-3xl p-6 space-y-4">
       <div class="flex justify-between items-center">
         <h3 id="modalTitle" class="text-base font-bold">Add Account</h3>
         <button onclick="closeAccountModal()" class="text-slate-400 text-sm">Cancel</button>
@@ -197,7 +204,7 @@
 
       <div>
         <label class="text-xs text-slate-400">Account / Asset Name</label>
-        <input id="accName" type="text" placeholder="e.g. Vanguard Global All Cap, Chase Savings" class="w-full mt-1 px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white focus:outline-none focus:border-indigo-500" />
+        <input id="accName" type="text" placeholder="e.g. Savings, ISA, SIPP, Mortgage" class="w-full mt-1 px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white focus:outline-none focus:border-indigo-500" />
       </div>
 
       <div class="grid grid-cols-2 gap-3">
@@ -253,42 +260,96 @@
   </nav>
 
   <script>
-    const STORAGE_KEY = 'worth_it_local_v1';
+    const STORAGE_KEY = 'worth_it_user_data_v2';
+    const DB_NAME = 'WorthItDB';
+    const STORE_NAME = 'stateStore';
+
     const CURRENCIES = [
       { code: 'GBP', symbol: '£' },
       { code: 'EUR', symbol: '€' },
       { code: 'USD', symbol: '$' }
     ];
 
-    let state = {
+    // Clean empty default state (no dummy accounts or snapshots)
+    const DEFAULT_STATE = {
       currencyIdx: 0,
       privacyMode: false,
       milestone: 100000,
-      accounts: [
-        { id: '1', name: 'High-Yield Savings', category: 'Cash & Savings', balance: 8500, ownership: 100 },
-        { id: '2', name: 'Global All Cap Index', category: 'Investments & Pension', balance: 34200, ownership: 100 },
-        { id: '3', name: 'Home Equity / Value', category: 'Property', balance: 280000, ownership: 50 },
-        { id: '4', name: 'Home Mortgage', category: 'Debt / Liability', balance: 190000, ownership: 50 }
-      ],
-      snapshots: [
-        { date: '2026-08-01', netWorth: 84500 },
-        { date: '2026-09-01', netWorth: 86100 },
-        { date: '2026-10-01', netWorth: 87700 }
-      ]
+      accounts: [],
+      snapshots: []
     };
 
+    let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
     let chartInstance = null;
 
-    function loadState() {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try { state = JSON.parse(saved); } catch (e) { console.error(e); }
+    // Request persistent storage lock from iOS/Browser
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist();
+    }
+
+    // IndexedDB Helper for backup persistence on iOS
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = e => {
+          e.target.result.createObjectStore(STORE_NAME);
+        };
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror = e => reject(e);
+      });
+    }
+
+    async function saveToIndexedDB(data) {
+      try {
+        const db = await openDB();
+        const tx = db.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put(data, STORAGE_KEY);
+      } catch (e) {
+        console.warn('IndexedDB write skipped:', e);
+      }
+    }
+
+    async function loadFromIndexedDB() {
+      try {
+        const db = await openDB();
+        return new Promise(resolve => {
+          const tx = db.transaction(STORE_NAME, 'readonly');
+          const req = tx.objectStore(STORE_NAME).get(STORAGE_KEY);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => resolve(null);
+        });
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function loadState() {
+      // Remove legacy dummy-data key if present
+      localStorage.removeItem('worth_it_local_v1');
+
+      const savedLocal = localStorage.getItem(STORAGE_KEY);
+      if (savedLocal) {
+        try {
+          state = JSON.parse(savedLocal);
+          renderAll();
+          return;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      // Fallback to IndexedDB if localStorage was cleared
+      const savedDB = await loadFromIndexedDB();
+      if (savedDB) {
+        state = savedDB;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       }
       renderAll();
     }
 
     function saveState() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      saveToIndexedDB(state);
       renderAll();
     }
 
@@ -316,6 +377,19 @@
       return { assets, debts, netWorth: assets - debts, byCategory };
     }
 
+    function syncTodaySnapshot() {
+      const { netWorth } = calculateTotals();
+      const today = new Date().toISOString().slice(0, 10);
+      if (state.accounts.length === 0 && state.snapshots.length === 0) return;
+
+      const existingIdx = state.snapshots.findIndex(s => s.date === today);
+      if (existingIdx >= 0) {
+        state.snapshots[existingIdx].netWorth = netWorth;
+      } else {
+        state.snapshots.push({ date: today, netWorth });
+      }
+    }
+
     function renderAll() {
       const cur = CURRENCIES[state.currencyIdx] || CURRENCIES[0];
       document.getElementById('currencyBtn').textContent = `${cur.code} (${cur.symbol})`;
@@ -336,13 +410,19 @@
       // Snapshot Change Badge
       const badge = document.getElementById('monthlyChangeBadge');
       if (state.snapshots.length > 0) {
-        const prev = state.snapshots[state.snapshots.length - 1].netWorth;
-        const diff = netWorth - prev;
-        const pct = prev !== 0 ? ((diff / Math.abs(prev)) * 100).toFixed(1) : '0.0';
+        const firstOrPrev = state.snapshots.length > 1
+          ? state.snapshots[state.snapshots.length - 2].netWorth
+          : state.snapshots[0].netWorth;
+        const diff = netWorth - firstOrPrev;
+        const pct = firstOrPrev !== 0 ? ((diff / Math.abs(firstOrPrev)) * 100).toFixed(1) : '0.0';
         const sign = diff >= 0 ? '+' : '';
-        badge.textContent = `${sign}${ formatMoney(diff) } (${sign}${pct}%)`;
+        badge.textContent = `${sign}${formatMoney(diff)} (${sign}${pct}%)`;
         badge.className = `px-2.5 py-1 rounded-full text-xs font-semibold ${diff >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`;
-        document.getElementById('lastSnapshotText').textContent = `Last snapshot: ${state.snapshots[state.snapshots.length - 1].date}`;
+        document.getElementById('lastSnapshotText').textContent = `Last saved: ${state.snapshots[state.snapshots.length - 1].date}`;
+      } else {
+        badge.textContent = '+0.0%';
+        badge.className = 'px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400';
+        document.getElementById('lastSnapshotText').textContent = 'No snapshots recorded yet';
       }
 
       // Milestone Progress
@@ -353,19 +433,28 @@
 
       // Category Allocation Breakdown
       const catList = document.getElementById('categorySummaryList');
-      catList.innerHTML = '';
-      Object.entries(byCategory).sort((a, b) => b[1] - a[1]).forEach(([cat, val]) => {
-        const pct = assets > 0 ? ((val / assets) * 100).toFixed(1) : 0;
-        catList.innerHTML += `
-          <div class="flex items-center justify-between">
-            <span class="text-slate-300">${cat}</span>
-            <div class="flex items-center gap-3">
-              <span class="money font-semibold text-white">${formatMoney(val)}</span>
-              <span class="text-xs text-slate-400 w-12 text-right">${pct}%</span>
-            </div>
+      const categories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+      if (categories.length === 0) {
+        catList.innerHTML = `
+          <div class="text-center py-4 text-xs text-slate-400">
+            No assets added yet. Tap <button onclick="switchTab('accounts'); openAccountModal();" class="text-emerald-400 font-semibold underline">+ Add Item</button> to start tracking.
           </div>
         `;
-      });
+      } else {
+        catList.innerHTML = '';
+        categories.forEach(([cat, val]) => {
+          const pct = assets > 0 ? ((val / assets) * 100).toFixed(1) : 0;
+          catList.innerHTML += `
+            <div class="flex items-center justify-between">
+              <span class="text-slate-300">${cat}</span>
+              <div class="flex items-center gap-3">
+                <span class="money font-semibold text-white">${formatMoney(val)}</span>
+                <span class="text-xs text-slate-400 w-12 text-right">${pct}%</span>
+              </div>
+            </div>
+          `;
+        });
+      }
 
       renderAccountsList();
       renderSnapshotsList();
@@ -376,6 +465,20 @@
     function renderAccountsList() {
       const container = document.getElementById('accountsContainer');
       container.innerHTML = '';
+
+      if (state.accounts.length === 0) {
+        container.innerHTML = `
+          <div class="glass-card rounded-2xl p-6 text-center space-y-3">
+            <p class="text-sm font-semibold text-slate-200">Your account list is empty</p>
+            <p class="text-xs text-slate-400">Add your savings, investments, property, or debts to calculate your net worth.</p>
+            <button onclick="openAccountModal()" class="px-4 py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition">
+              + Add First Account
+            </button>
+          </div>
+        `;
+        return;
+      }
+
       const groups = {};
       state.accounts.forEach(acc => {
         if (!groups[acc.category]) groups[acc.category] = [];
@@ -411,8 +514,14 @@
       const ctx = document.getElementById('trendChart').getContext('2d');
       const labels = state.snapshots.map(s => s.date.slice(5));
       const dataPoints = state.snapshots.map(s => s.netWorth);
-      labels.push('Now');
-      dataPoints.push(currentNetWorth);
+
+      if (labels.length === 0) {
+        labels.push('Start', 'Now');
+        dataPoints.push(0, currentNetWorth);
+      } else {
+        labels.push('Now');
+        dataPoints.push(currentNetWorth);
+      }
 
       if (chartInstance) chartInstance.destroy();
       chartInstance = new Chart(ctx, {
@@ -450,19 +559,16 @@
     }
 
     function recordSnapshot() {
-      const { netWorth } = calculateTotals();
-      const today = new Date().toISOString().slice(0, 10);
-      const existingIdx = state.snapshots.findIndex(s => s.date === today);
-      if (existingIdx >= 0) {
-        state.snapshots[existingIdx].netWorth = netWorth;
-      } else {
-        state.snapshots.push({ date: today, netWorth });
-      }
+      syncTodaySnapshot();
       saveState();
     }
 
     function renderSnapshotsList() {
       const list = document.getElementById('snapshotHistoryList');
+      if (state.snapshots.length === 0) {
+        list.innerHTML = '<p class="text-slate-500">No snapshots recorded yet.</p>';
+        return;
+      }
       list.innerHTML = '';
       [...state.snapshots].reverse().forEach((s, idx) => {
         const realIdx = state.snapshots.length - 1 - idx;
@@ -524,6 +630,8 @@
       } else {
         state.accounts.push({ id: Date.now().toString(), name, category, ownership, balance });
       }
+
+      syncTodaySnapshot();
       closeAccountModal();
       saveState();
     }
@@ -531,13 +639,21 @@
     function deleteAccount() {
       const id = document.getElementById('accId').value;
       state.accounts = state.accounts.filter(a => a.id !== id);
+      syncTodaySnapshot();
       closeAccountModal();
       saveState();
     }
 
+    function clearAllData() {
+      if (confirm('Are you sure you want to delete all accounts and snapshots from this phone?')) {
+        state = JSON.parse(JSON.stringify(DEFAULT_STATE));
+        saveState();
+      }
+    }
+
     function editMilestone() {
       const input = prompt('Enter your next Net Worth target:', state.milestone);
-      if (input !== null && !isNaN(Number(input))) {
+      if (input !== null && input.trim() !== '' && !isNaN(Number(input))) {
         state.milestone = Number(input);
         saveState();
       }
@@ -597,10 +713,10 @@
       reader.onload = e => {
         try {
           const imported = JSON.parse(e.target.result);
-          if (imported.accounts && imported.snapshots) {
+          if (Array.isArray(imported.accounts) && Array.isArray(imported.snapshots)) {
             state = imported;
             saveState();
-            alert('Backup restored successfully!');
+            alert('Backup restored and saved to your phone!');
           }
         } catch (err) {
           alert('Invalid JSON backup file.');
